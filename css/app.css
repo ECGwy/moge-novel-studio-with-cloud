@@ -177,8 +177,11 @@ body.focus .topbar,body.focus .tabbar,body.focus .editor-head,body.focus .editor
 body.focus #view-editor{padding-top:var(--safe-t)}
 body.focus .editor{padding-top:calc(var(--safe-t) + 20px)}
 
-/* ---------- 抽屉 ---------- */
-.drawer-mask,.sheet-mask,.modal-mask{position:fixed;inset:0;background:rgba(6,4,20,.6);backdrop-filter:blur(2px);z-index:40}
+/* ---------- 链接与行内代码 ---------- */
+a{color:var(--brand-2);text-decoration:underline;text-underline-offset:2px;word-break:break-word}
+code{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:1px 5px;font-size:.92em;word-break:break-all}
+
+/* ---------- 抽屉 ---------- */.drawer-mask,.sheet-mask,.modal-mask{position:fixed;inset:0;background:rgba(6,4,20,.6);backdrop-filter:blur(2px);z-index:40}
 .drawer{
   position:fixed;top:0;bottom:0;left:0;width:min(84vw,360px);z-index:50;
   background:var(--bg-2);border-right:1px solid var(--line);

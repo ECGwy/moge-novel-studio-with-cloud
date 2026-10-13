@@ -810,8 +810,89 @@ async function runSync({ direction = 'both', silent = false } = {}) {
   }
 }
 
-async function testSync() {
-  await saveSyncForm();
+function syncGuide() {
+  const p = S.syncCfg?.provider || 'gist';
+  const body = {
+    gist: `
+      <h3>用 GitHub 同步（推荐）</h3>
+      <p class="small">
+      <b>① 生成一个令牌（只做一次）</b><br>
+      手机或电脑浏览器打开 <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener">github.com/settings/tokens/new</a>（需先登录 GitHub 账号）<br>
+      · Note 随便写，例如「墨阁同步」<br>
+      · Expiration 建议选 <b>No expiration</b>（选 90 天的话到期要重新生成）<br>
+      · 权限<b>只勾 <code>gist</code> 这一项</b>，其他一律不要勾<br>
+      · 拉到底点 <b>Generate token</b><br>
+      · 复制出现的 <code>ghp_...</code> —— <b>这串只显示这一次</b>
+      </p>
+      <p class="small">
+      <b>② 填进墨阁</b><br>
+      同步方式选「GitHub Gist」→ GitHub Token 粘贴 →<b> Gist ID 留空</b> → 点「测试连接」<br>
+      显示「Token 有效（你的用户名）」就说明通了
+      </p>
+      <p class="small">
+      <b>③ 第一次同步</b><br>
+      点「立即同步」，会自动在你的 GitHub 里建一个 <b>secret（不公开列出）Gist</b> 存这本书库。<br>
+      同步完成后，上面「Gist ID」那一栏会<b>自动填上一串字符，请把它记下来</b>。
+      </p>
+      <p class="small">
+      <b>④ 另一台设备（手机 ↔ 电脑）</b><br>
+      用同一个网址打开墨阁 → 我的 → 云同步 → 填<b>同一个 Token</b> 和<b>同一个 Gist ID</b> → 测试连接 → 立即同步。<br>
+      之后每次写完点一下「立即同步」即可；想让它自己同步就把「自动同步」打开。
+      </p>
+      <p class="muted tiny">
+      · Token 只保存在本机浏览器里，只会发给 api.github.com，不会经过任何第三方服务器<br>
+      · 只勾了 gist 权限，就算令牌泄露也动不了你的代码仓库；不用了去 <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> 删掉即可<br>
+      · 云端就是你 GitHub 里的一个 Gist，文件名叫 <code>moge-sync.json</code>，请不要手动改它<br>
+      · ⚠️ Gist 的 secret 只是"不公开列出"，<b>知道链接的人就能看到内容</b>——别把 Gist 链接发给别人；<br>
+      &nbsp;&nbsp;&nbsp;想真正私有请改用「自建同步端点」或「WebDAV」
+      </p>`,
+    worker: `
+      <h3>用自建 Worker 同步</h3>
+      <p class="small">
+      <b>① 部署 Worker（只做一次）</b><br>
+      按 README 第二节 ① 把 <code>proxy/cloudflare-worker.js</code> 部署到 Cloudflare（免费）。<br>
+      想用同步还需：控制台 → Storage &amp; Databases → KV → 建一个命名空间 →
+      回到 Worker → Settings → Bindings → 添加 KV Namespace，<b>变量名必须填 MOGE_KV</b> → 重新部署。
+      </p>
+      <p class="small">
+      <b>② 验证</b><br>
+      浏览器打开 <code>https://你的worker.workers.dev/health</code>，看到 <code>{"ok":true,"kv":true}</code> 就绑好了。
+      </p>
+      <p class="small">
+      <b>③ 填进墨阁</b><br>
+      同步地址填 <code>https://你的worker.workers.dev</code>（结尾不加 <code>?url=</code>）<br>
+      房间号点 🎲 生成一个，<b>多台设备必须填一模一样的房间号</b>；Worker 设了 TOKEN 就填进「访问令牌」。<br>
+      点「测试连接」→「立即同步」。
+      </p>
+      <p class="muted tiny">这个 Worker 同时还能当 AI 接口的 CORS 代理用，一个部署两用。</p>`,
+    webdav: `
+      <h3>用 WebDAV（坚果云等）同步</h3>
+      <p class="small">
+      <b>① 拿应用密码</b><br>
+      坚果云网页端 → 头像 → 账户信息 → 安全选项 → <b>添加应用密码</b>，记下这串密码（不是登录密码）。
+      </p>
+      <p class="small">
+      <b>② 建个文件夹</b><br>
+      在坚果云里新建文件夹「墨阁」，文件地址就是：<br>
+      <code>https://dav.jianguoyun.com/dav/墨阁/moge-sync.json</code><br>
+      （最后一段是文件名，墨阁会自己创建）
+      </p>
+      <p class="small">
+      <b>③ 必须填 CORS 代理</b><br>
+      坚果云不允许网页直连。把 README 第二节 ① 的 Worker 部署好，代理地址填：<br>
+      <code>https://你的worker.workers.dev/?url=</code>
+      </p>
+      <p class="small">
+      <b>④ 填进墨阁</b><br>
+      WebDAV 地址 + 坚果云登录邮箱 + 应用密码 + 代理地址 → 测试连接 → 立即同步。<br>
+      另一台设备填完全一样的内容即可。
+      </p>`,
+  }[p];
+  openModal(`${body}
+    <div class="btn-row"><button class="btn btn-primary" data-close="1">知道了</button></div>`);
+}
+
+async function testSync() {  await saveSyncForm();
   const btn = $('btnSyncTest');
   btn.disabled = true;
   const old = btn.textContent;
@@ -1253,6 +1334,7 @@ function bindGlobal() {
   $('syncAuto').addEventListener('change', () => saveSyncForm());
   $('btnSyncNow').addEventListener('click', () => runSync());
   $('btnSyncTest').addEventListener('click', testSync);
+  $('btnSyncGuide').addEventListener('click', syncGuide);
   $('btnSyncPush').addEventListener('click', () => runSync({ direction: 'push' }));
   $('btnSyncPull').addEventListener('click', async () => {
     await saveSyncForm();

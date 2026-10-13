@@ -151,6 +151,16 @@ try {
   await sleep(500);
   await shot('05b-云同步');
 
+  await ev(`(async () => {
+    const sel = document.getElementById('syncProvider');
+    sel.value = 'gist'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 250));
+    document.getElementById('btnSyncGuide').click();
+  })()`, true);
+  await sleep(500);
+  await shot('05c-GitHub同步教程');
+  await ev(`document.querySelector('#modalBox [data-close]').click()`);
+
   await ev(`document.querySelector('.tab[data-view="editor"]').click(); document.getElementById('btnChapters').click();`);
   await sleep(500);
   await shot('06-目录');

@@ -1,8 +1,8 @@
 {
   "name": "moge-novel-studio",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "墨阁 · AI 小说工作室 —— 可安装到手机的 PWA 写作应用，接入 DeepSeek / OpenAI / Claude / Gemini 等接口辅助写作。",
+  "description": "墨阁 · AI 小说工作室 —— 可安装到手机的 PWA 写作应用，接入 DeepSeek / OpenAI / Claude / Gemini 等接口辅助写作，支持多设备云同步。",
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs 5173",

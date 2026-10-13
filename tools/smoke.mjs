@@ -483,7 +483,22 @@ try {
   results.gistUpdate = gistR2;
   results.gistCount = cloud.gists.size;
 
-  // 7) 错误路径：房间不存在 / 认证失败
+  // 7) 内置配置教程（GitHub 路径）
+  await ev(`document.getElementById('btnSyncGuide').click()`, true);
+  await sleep(250);
+  results.syncGuide = await ev(`(() => {
+    const t = document.getElementById('modalBox');
+    return {
+      title: (t.querySelector('h3') || {}).textContent || '',
+      hasTokenUrl: t.textContent.includes('github.com/settings/tokens/new'),
+      hasGistIdHint: t.textContent.includes('Gist ID'),
+      hasSecondDevice: t.textContent.includes('另一台设备'),
+      hasTokenLink: !!t.querySelector('a[href*="settings/tokens/new"]'),
+    };
+  })()`, true);
+  await ev(`document.querySelector('#modalBox [data-close]').click()`);
+
+  // 8) 错误路径：认证失败
   results.syncErr401 = await ev(`(async () => {
     const S = await import('./js/sync.js');
     try { await S.remoteRead({ provider: 'webdav', davUrl: 'http://127.0.0.1:5200/dav/moge-sync.json', davUser: 'x', davPass: 'y' }); return 'no-error'; }
@@ -562,6 +577,9 @@ const checks = [
   ['云同步：Gist 自动创建', !!results.gistSync?.gistId && results.gistStored === 1],
   ['云同步：Gist 二次同步走更新', results.gistUpdate?.ok === true && results.gistCount === 1],
   ['云同步：认证失败有友好提示', /\[401\]/.test(results.syncErr401 || '')],
+  ['云同步：内置配置教程可打开', results.syncGuide?.title?.includes('GitHub') === true && results.syncGuide?.hasTokenUrl === true],
+  ['云同步：教程含 Gist ID 与多设备说明', results.syncGuide?.hasGistIdHint === true && results.syncGuide?.hasSecondDevice === true],
+  ['云同步：教程里的令牌网址可点', results.syncGuide?.hasTokenLink === true],
   ['无页面报错', errs.length === 0],
   ['无控制台报错', consoleErrors.length === 0],
 ];

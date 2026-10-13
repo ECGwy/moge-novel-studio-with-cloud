@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>墨阁 · AI 小说工作室</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+<meta name="description" content="离线可用的手机写小说应用，接入 DeepSeek / OpenAI / Claude / Gemini 等 AI 接口辅助写作。" />
+<meta name="theme-color" content="#1e1b4b" />
+<meta name="color-scheme" content="dark light" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="墨阁" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ========== 顶栏 ========== -->
+  <header class="topbar" id="topbar">
+    <button class="icon-btn" id="btnBack" hidden aria-label="返回">‹</button>
+    <div class="topbar-title" id="topTitle">墨阁</div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="btnFocus" aria-label="专注模式" title="专注模式">⛶</button>
+      <button class="icon-btn primary" id="btnAI" aria-label="AI 助手">✦</button>
+    </div>
+  </header>
+
+  <!-- ========== 书架 ========== -->
+  <section class="view active" id="view-library">
+    <div class="lib-head">
+      <div>
+        <h1>我的书架</h1>
+        <p class="muted" id="libStat">还没有作品</p>
+      </div>
+      <button class="btn btn-primary" id="btnNewProject">＋ 新书</button>
+    </div>
+    <div class="grid" id="projectList"></div>
+    <div class="empty" id="libEmpty">
+      <div class="empty-emoji">🖋️</div>
+      <h2>开始你的第一本书</h2>
+      <p class="muted">点右上角「新书」创建作品，然后去「我的」配置 AI 接口，就能让 AI 陪你写下去。</p>
+      <button class="btn btn-primary" id="btnNewProject2">创建新书</button>
+    </div>
+  </section>
+
+  <!-- ========== 写作 ========== -->
+  <section class="view" id="view-editor">
+    <div class="editor-head">
+      <button class="chip-btn" id="btnChapters">☰ 目录</button>
+      <input id="chapterTitle" class="chapter-title-input" placeholder="章节标题" />
+      <button class="chip-btn" id="btnAddChapter">＋</button>
+    </div>
+    <div class="editor-meta">
+      <span id="wordCount">0 字</span>
+      <span class="dot">·</span>
+      <span id="saveState" class="muted">已保存</span>
+      <span class="dot">·</span>
+      <span id="goalText" class="muted"></span>
+    </div>
+    <div class="goalbar"><i id="goalBar"></i></div>
+    <textarea id="editor" class="editor" placeholder="在这里写下故事的开头……&#10;&#10;提示：写完一段后点右上角 ✦，让 AI 接着往下写。" spellcheck="false"></textarea>
+    <div class="editor-foot">
+      <button class="chip-btn" id="btnPrevChapter">‹ 上一章</button>
+      <button class="chip-btn" id="btnAIContext">✦ AI 续写</button>
+      <button class="chip-btn" id="btnNextChapter">下一章 ›</button>
+    </div>
+  </section>
+
+  <!-- ========== 设定 ========== -->
+  <section class="view" id="view-bible">
+    <div class="pad">
+      <h1 class="view-title">本书设定</h1>
+      <p class="muted small">填得越细，AI 续写越像你写的那本书。这些内容会自动作为上下文发给 AI。</p>
+
+      <label class="field"><span>书名</span><input id="setTitle" placeholder="例如：青焰纪" /></label>
+      <div class="row2">
+        <label class="field"><span>题材</span><input id="setGenre" placeholder="玄幻 / 悬疑 / 都市" /></label>
+        <label class="field"><span>视角</span>
+          <select id="setPov">
+            <option value="第三人称有限视角">第三人称（限知）</option>
+            <option value="第一人称">第一人称</option>
+            <option value="第三人称全知视角">第三人称（全知）</option>
+          </select>
+        </label>
+      </div>
+      <label class="field"><span>一句话简介</span><textarea id="setSynopsis" rows="2" placeholder="主角是谁，要做什么，最大的阻碍是什么"></textarea></label>
+      <label class="field"><span>世界观 / 背景设定</span><textarea id="setWorld" rows="5" placeholder="时代、地点、力量体系、规则、势力……"></textarea></label>
+      <label class="field"><span>文风要求</span><textarea id="setStyle" rows="3" placeholder="例如：短句为主，画面感强，少用成语，对话口语化，节奏快"></textarea></label>
+      <div class="row2">
+        <label class="field"><span>单章目标字数</span><input id="setGoal" type="number" min="0" step="100" placeholder="2000" inputmode="numeric" /></label>
+        <label class="field"><span>AI 单次输出字数</span><input id="setChunk" type="number" min="200" step="100" placeholder="800" inputmode="numeric" /></label>
+      </div>
+
+      <h2 class="sub">角色卡</h2>
+      <div id="characterList"></div>
+      <button class="btn btn-ghost btn-block" id="btnAddChar">＋ 添加角色</button>
+
+      <h2 class="sub">已写章节摘要（可选）</h2>
+      <p class="muted small">给每一章写一两句「发生了什么」，AI 就能记住前情，不会前后矛盾。</p>
+      <div id="summaryList"></div>
+
+      <div class="gap"></div>
+    </div>
+  </section>
+
+  <!-- ========== 我的 / 设置 ========== -->
+  <section class="view" id="view-settings">
+    <div class="pad">
+      <h1 class="view-title">我的</h1>
+
+      <div class="card" id="installCard">
+        <div class="card-title">📲 安装到手机</div>
+        <p class="muted small" id="installHint">把本页装成手机桌面 App，离线也能写，打开就是全屏。</p>
+        <button class="btn btn-primary btn-block" id="btnInstall" disabled>安装到主屏幕</button>
+        <p class="muted tiny" id="installState"></p>
+      </div>
+
+      <h2 class="sub">AI 接口</h2>
+      <div class="card">
+        <label class="field"><span>服务商</span>
+          <select id="cfgProvider"></select>
+        </label>
+        <label class="field"><span>接口地址 Base URL</span><input id="cfgBaseUrl" placeholder="https://api.deepseek.com/v1" autocapitalize="off" autocorrect="off" spellcheck="false" /></label>
+        <label class="field"><span>API Key</span>
+          <div class="input-group">
+            <input id="cfgApiKey" type="password" placeholder="sk-..." autocapitalize="off" autocorrect="off" spellcheck="false" />
+            <button class="icon-btn" id="btnToggleKey" type="button">👁</button>
+          </div>
+        </label>
+        <label class="field"><span>模型</span>
+          <div class="input-group">
+            <input id="cfgModel" placeholder="deepseek-chat" autocapitalize="off" spellcheck="false" list="modelList" />
+            <button class="icon-btn" id="btnListModels" type="button" title="拉取模型列表">⇩</button>
+          </div>
+        </label>
+        <datalist id="modelList"></datalist>
+        <div class="row2">
+          <label class="field"><span>温度 <b id="tempVal">0.9</b></span><input id="cfgTemp" type="range" min="0" max="2" step="0.1" /></label>
+          <label class="field"><span>单次最大输出</span><input id="cfgMaxTokens" type="number" step="128" min="128" inputmode="numeric" /></label>
+        </div>
+        <div class="row2">
+          <label class="field"><span>发给 AI 的上下文字数</span><input id="cfgContext" type="number" step="500" min="500" inputmode="numeric" /></label>
+          <label class="field"><span>流式输出</span>
+            <select id="cfgStream"><option value="1">开启（推荐）</option><option value="0">关闭</option></select>
+          </label>
+        </div>
+        <label class="field"><span>AI 角色设定（系统提示词）</span><textarea id="cfgSystem" rows="4"></textarea></label>
+        <details class="adv">
+          <summary>高级选项</summary>
+          <label class="field"><span>CORS 代理（浏览器直连被拦时使用）</span><input id="cfgProxy" placeholder="例如 https://your-proxy.example.com/?url=" autocapitalize="off" spellcheck="false" /></label>
+          <label class="field"><span>自定义请求头（JSON）</span><textarea id="cfgHeaders" rows="2" placeholder='{"HTTP-Referer":"https://example.com"}' spellcheck="false"></textarea></label>
+        </details>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btnTestAI">测试连接</button>
+          <button class="btn btn-ghost" id="btnSaveAI">保存</button>
+        </div>
+        <p class="muted tiny">密钥只保存在这台手机的浏览器里，不会上传到任何服务器。请勿在公用设备上填写。</p>
+      </div>
+
+      <h2 class="sub">写作偏好</h2>
+      <div class="card">
+        <label class="field"><span>正文字号 <b id="fontVal">17</b> px</span><input id="cfgFontSize" type="range" min="14" max="24" step="1" /></label>
+        <label class="field"><span>行距 <b id="lhVal">1.9</b></span><input id="cfgLineHeight" type="range" min="1.4" max="2.6" step="0.1" /></label>
+        <label class="field"><span>连续写作提醒（分钟，0=关闭）</span><input id="cfgBreak" type="number" min="0" step="5" inputmode="numeric" /></label>
+      </div>
+
+      <h2 class="sub">云同步</h2>
+      <div class="card">
+        <p class="muted small">把整本书库上传到云端，换一台设备登录同一个云端地址就能接着写。同步前会自动保存当前章节。</p>
+        <label class="field"><span>同步方式</span>
+          <select id="syncProvider"></select>
+        </label>
+        <p class="muted tiny" id="syncHint"></p>
+        <div id="syncFields"></div>
+        <label class="field"><span>自动同步</span>
+          <select id="syncAuto">
+            <option value="0">关闭（只手动同步）</option>
+            <option value="2">每 2 分钟（有改动才同步）</option>
+            <option value="5">每 5 分钟（有改动才同步）</option>
+            <option value="15">每 15 分钟（有改动才同步）</option>
+          </select>
+        </label>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btnSyncNow">立即同步</button>
+          <button class="btn btn-ghost" id="btnSyncTest">测试连接</button>
+        </div>
+        <div class="btn-row wrap">
+          <button class="btn btn-ghost" id="btnSyncPush">仅上传</button>
+          <button class="btn btn-ghost" id="btnSyncPull">仅下载覆盖本机</button>
+          <button class="btn btn-ghost" id="btnSyncReset">重置同步基线</button>
+        </div>
+        <p class="muted tiny" id="syncStatus">尚未同步</p>
+      </div>
+
+      <h2 class="sub">数据</h2>
+      <div class="card">
+        <div class="btn-row wrap">
+          <button class="btn btn-ghost" id="btnExportTxt">导出本书 TXT</button>
+          <button class="btn btn-ghost" id="btnExportMd">导出本书 Markdown</button>
+          <button class="btn btn-ghost" id="btnExportAll">导出全部 TXT</button>
+        </div>
+        <div class="btn-row wrap">
+          <button class="btn btn-ghost" id="btnBackup">备份全部数据(JSON)</button>
+          <button class="btn btn-ghost" id="btnRestore">从备份恢复</button>
+        </div>
+        <p class="muted tiny">建议每周备份一次。手机清理浏览器数据会连小说一起清掉。</p>
+      </div>
+
+      <h2 class="sub">关于</h2>
+      <div class="card">
+        <p class="small">墨阁 · 纯本地写作应用，代码全部在你自己的设备/服务器上运行。</p>
+        <p class="muted tiny" id="appVersion"></p>
+        <div class="btn-row"><button class="btn btn-ghost" id="btnHelp">使用说明</button></div>
+      </div>
+      <div class="gap"></div>
+    </div>
+  </section>
+
+  <!-- ========== 底部导航 ========== -->
+  <nav class="tabbar" id="tabbar">
+    <button data-view="library" class="tab active"><i>📚</i><span>书架</span></button>
+    <button data-view="editor" class="tab"><i>✍️</i><span>写作</span></button>
+    <button data-view="bible" class="tab"><i>🗂️</i><span>设定</span></button>
+    <button data-view="settings" class="tab"><i>⚙️</i><span>我的</span></button>
+  </nav>
+</div>
+
+<!-- ========== 章节抽屉 ========== -->
+<div class="drawer-mask" id="drawerMask" hidden></div>
+<aside class="drawer" id="drawer" hidden>
+  <div class="drawer-head">
+    <b>目录</b>
+    <span class="muted small" id="drawerCount"></span>
+    <button class="icon-btn" id="btnDrawerOrder">正/倒序</button>
+    <button class="icon-btn" id="btnCloseDrawer">✕</button>
+  </div>
+  <div class="drawer-list" id="drawerList"></div>
+  <div class="drawer-foot"><button class="btn btn-primary btn-block" id="btnAddChapter2">＋ 新建章节</button></div>
+</aside>
+
+<!-- ========== AI 面板 ========== -->
+<div class="sheet-mask" id="aiMask" hidden></div>
+<section class="sheet" id="aiSheet" hidden>
+  <div class="sheet-handle"></div>
+  <div class="sheet-head">
+    <b>✦ AI 写作助手</b>
+    <span class="muted small" id="aiModelTag"></span>
+    <button class="icon-btn" id="btnCloseAI">✕</button>
+  </div>
+  <div class="chips" id="aiActions"></div>
+  <div class="sheet-body">
+    <textarea id="aiInstruction" rows="2" placeholder="补充你的要求（可留空）：例如「让主角在这里第一次动用底牌」"></textarea>
+    <div class="muted tiny" id="aiSelectionTip"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btnGenerate">开始生成</button>
+      <button class="btn btn-ghost" id="btnStopGen" hidden>停止</button>
+      <button class="btn btn-ghost" id="btnContinueGen" hidden>继续写</button>
+    </div>
+    <textarea id="aiOutput" class="ai-output" rows="8" placeholder="AI 生成的内容会显示在这里，可以直接修改后再插入正文。" spellcheck="false"></textarea>
+    <div class="btn-row wrap" id="aiInsertRow">
+      <button class="btn btn-soft" id="btnInsertEnd">追加到本章末尾</button>
+      <button class="btn btn-soft" id="btnInsertCursor">插入到光标处</button>
+      <button class="btn btn-soft" id="btnReplaceSel" disabled>替换选中</button>
+      <button class="btn btn-soft" id="btnCopyOut">复制</button>
+      <button class="btn btn-soft" id="btnSaveSummary">存为本章摘要</button>
+      <button class="btn btn-soft" id="btnClearOut">清空</button>
+    </div>
+    <div class="muted tiny" id="aiStatus"></div>
+  </div>
+</section>
+
+<div class="modal-mask" id="modalMask" hidden>
+  <div class="modal" id="modalBox"></div>
+</div>
+<div id="toast" class="toast" hidden></div>
+<input type="file" id="fileInput" accept=".json,application/json" hidden />
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

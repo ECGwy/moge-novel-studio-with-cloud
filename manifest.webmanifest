@@ -1,0 +1,25 @@
+{
+  "id": "./",
+  "name": "墨阁 · AI 小说工作室",
+  "short_name": "墨阁",
+  "description": "离线可用的手机小说写作应用，可接入 DeepSeek / OpenAI / Claude / Gemini 等 AI 接口辅助写作。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#0f0d1c",
+  "theme_color": "#1e1b4b",
+  "categories": ["productivity", "books", "utilities"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "继续写作", "short_name": "写作", "url": "./index.html#write", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "我的设置", "short_name": "设置", "url": "./index.html#settings", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

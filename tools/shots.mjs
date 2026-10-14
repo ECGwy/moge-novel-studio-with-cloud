@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeProfile, killAndClean, announceSweep } from './temp.mjs';
 
 const URL_ = process.argv[2] || 'http://127.0.0.1:5173/';
 const OUT = process.argv[3] || path.join(path.dirname(path.dirname(fileURLToPath(import.meta.url))), 'preview');
@@ -14,7 +15,8 @@ const CHROME = [
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
 ].find((p) => fs.existsSync(p));
 const PORT = 9334;
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'moge-shots-'));
+announceSweep();
+const profile = makeProfile('shots');
 const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
   '--remote-debugging-port=' + PORT, '--user-data-dir=' + profile, 'about:blank',
@@ -141,6 +143,20 @@ try {
   await shot('05-我的');
 
   await ev(`(async () => {
+    document.getElementById('storageInfo').scrollIntoView({ block: 'center' });
+  })()`, true);
+  await sleep(400);
+  await shot('05d-存储占用');
+
+  await ev(`(async () => {
+    document.querySelector('.view.active').scrollTop = 0;
+    document.getElementById('btnInstallHelp').click();
+  })()`, true);
+  await sleep(500);
+  await shot('05a-安装失败排查');
+  await ev(`document.querySelector('#modalBox [data-close]').click()`);
+
+  await ev(`(async () => {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const sel = document.getElementById('syncProvider');
     sel.value = 'webdav'; sel.dispatchEvent(new Event('change', { bubbles: true }));
@@ -161,6 +177,21 @@ try {
   await shot('05c-GitHub同步教程');
   await ev(`document.querySelector('#modalBox [data-close]').click()`);
 
+  await ev(`document.querySelector('.tab[data-view="library"]').click()`);
+  await sleep(300);
+  await ev(`(async () => {
+    MOGE.importBookFlow();
+    await new Promise(r => setTimeout(r, 200));
+    const t = document.getElementById('impText');
+    t.value = '钟声响了七下。\\n\\n陈默从床上坐起来，摸黑找到那盏灯。他怕黑，但灯塔不能没有光。\\n\\n信件躺在门缝里，信封上写着三十年前的日期。';
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('impKeywords').value = '科幻 灯塔 废土';
+  })()`, true);
+  await sleep(500);
+  await shot('08-导入书籍');
+  await ev(`document.querySelector('#modalBox [data-close]') ? null : document.getElementById('modalMask').click()`);
+  await sleep(200);
+
   await ev(`document.querySelector('.tab[data-view="editor"]').click(); document.getElementById('btnChapters').click();`);
   await sleep(500);
   await shot('06-目录');
@@ -173,7 +204,6 @@ try {
   process.exitCode = 1;
 } finally {
   try { ws && ws.close(); } catch (_) {}
-  chrome.kill();
-  try { fs.rmSync(profile, { recursive: true, force: true }); } catch (_) {}
+  await killAndClean(chrome, profile);
 }
 console.log('共 ' + shots.length + ' 张 ->', OUT);

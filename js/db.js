@@ -43,6 +43,7 @@ export const db = {
   async put(store, value) { return wrap((await tx(store, 'readwrite')).put(value)); },
   async del(store, key) { return wrap((await tx(store, 'readwrite')).delete(key)); },
   async clear(store) { return wrap((await tx(store, 'readwrite')).clear()); },
+  async keys(store) { return wrap((await tx(store, 'readonly')).getAllKeys()); },
   async byProject(projectId) {
     const os = await tx('chapters', 'readonly');
     return wrap(os.index('projectId').getAll(IDBKeyRange.only(projectId)));

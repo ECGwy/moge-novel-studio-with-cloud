@@ -7,10 +7,11 @@ import {
   syncNow, remoteTest, addTombstone, resetSyncBaseline,
   scheduleSync, markSynced, hasPendingSync,
 } from './sync.js';
+import { serializeBook, parseBook, specText, SPEC_PROMPT, FORMAT_NAME, FORMAT_VERSION } from './book-format.js';
 
 /* ---------------- 小工具 ---------------- */
 const $ = (id) => document.getElementById(id);
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 
 const DEFAULT_SETTINGS = {
   provider: 'deepseek',
@@ -194,7 +195,7 @@ function go(view) {
   $('btnFocus').hidden = view !== 'editor';
   if (view === 'library') renderLibrary();
   if (view === 'bible') renderBible();
-  if (view === 'settings') renderSettings();
+  if (view === 'settings') { renderSettings(); updateStorageInfo(); }
 }
 
 /* ---------------- 书架 ---------------- */
@@ -256,7 +257,7 @@ async function projectMenu(p) {
       const c = b.dataset.c;
       closeModal();
       if (c === 'open') return openProject(p.id);
-      if (c === 'txt') return exportProject(p, 'txt');
+      if (c === 'txt') return exportProject(p, 'standard-md');
       if (c === 'rename') {
         const name = await askInput('作品改名', { label: '新书名', value: p.title });
         if (name && name.trim()) {
@@ -1096,20 +1097,401 @@ function projectToText(p, { md = false } = {}) {
   return lines.join('\n');
 }
 
-function exportProject(p, kind) {
-  if (!p) return;
+function exportProject(p, kind = 'standard-md') {
+  if (!p) return toast('先在书架里打开一本书');
   const chs = chaptersOf(p.id);
-  if (!chs.some((c) => (c.content || '').trim())) { toast('这本还没有内容'); return; }
-  const body = projectToText(p, { md: kind === 'md' });
-  download(`${safeName(p.title)}.${kind === 'md' ? 'md' : 'txt'}`, body, kind === 'md' ? 'text/markdown;charset=utf-8' : 'text/plain;charset=utf-8');
+  if (!chs.length) { toast('这本还没有章节'); return; }
+  const hasText = chs.some((c) => (c.content || '').trim());
+  if (!hasText && !p.world && !(p.characters || []).length) { toast('这本还没有内容'); return; }
+  if (kind === 'plain-txt') {
+    download(`${safeName(p.title)}-正文.txt`, serializeBook(p, chs, { plain: true }));
+  } else if (kind === 'standard-txt') {
+    download(`${safeName(p.title)}.txt`, serializeBook(p, chs));
+  } else {
+    download(`${safeName(p.title)}.md`, serializeBook(p, chs), 'text/markdown;charset=utf-8');
+  }
   toast('已导出，请在通知栏/下载里查看');
 }
 
 function exportAllTxt() {
-  const body = S.projects.map((p) => projectToText(p, { md: false })).join('\n\n\n' + '='.repeat(30) + '\n\n\n');
+  const body = S.projects.map((p) => serializeBook(p, chaptersOf(p.id), { plain: true }))
+    .join('\n\n\n' + '='.repeat(30) + '\n\n\n');
   if (!body.trim()) return toast('还没有内容');
   download('墨阁全部作品.txt', body);
   toast('已导出全部作品');
+}
+
+/* ---------------- 导入书籍 ---------------- */
+function hasAI() {
+  const st = S.settings;
+  const local = /localhost|127\.0\.0\.1/.test(st.baseUrl || '');
+  return !!(st.baseUrl && st.model && (st.apiKey || local));
+}
+
+async function aiText(system, user, { maxTokens = 4096 } = {}) {
+  const text = await streamChat(
+    settingsCfg({ system, messages: [{ role: 'user', content: user }], stream: false, maxTokens }),
+    null, null
+  );
+  return String(text || '');
+}
+
+const IMPORT_HTML = `
+  <h3>导入书籍</h3>
+  <p class="muted small">支持墨阁标准书稿（.md / .txt），也支持任意分章文本；没有分章的可以用 AI 自动分章。</p>
+  <label class="field"><span>① 选择文件</span>
+    <input type="file" id="impFile" accept=".txt,.md,.markdown,.text,text/plain,text/markdown" />
+  </label>
+  <label class="field"><span>或者直接粘贴正文</span>
+    <textarea id="impText" rows="6" placeholder="把整本书粘进来…"></textarea>
+  </label>
+  <label class="field"><span>② 关键词（可选，帮 AI 判断题材和设定）</span>
+    <input id="impKeywords" placeholder="例如：玄幻 复仇 铸剑师 慢热" autocapitalize="off" />
+  </label>
+  <div class="field"><span>③ AI 处理（需要先在「我的」里配好接口）</span>
+    <label class="chk"><input type="checkbox" id="impAIMeta" checked /> 补全书名 / 题材 / 视角 / 简介 / 世界观 / 文风 / 角色卡</label>
+    <label class="chk"><input type="checkbox" id="impAISum" checked /> 生成每章摘要（喂给后续 AI 记前情）</label>
+    <label class="chk"><input type="checkbox" id="impAIStruct" /> 强制用 AI 重新分章（本地已认出章节时一般不用）</label>
+  </div>
+  <p class="muted tiny" id="impPreview">还没有内容</p>
+  <div class="btn-row">
+    <button class="btn btn-ghost" id="impSpec">格式说明</button>
+    <button class="btn btn-primary" id="impGo">开始导入</button>
+  </div>
+  <pre class="imp-log" id="impLog" hidden></pre>
+  <p class="muted tiny">导入是新增一本书，不会动你已有的作品。</p>`;
+
+function importBookFlow() {
+  openModal(IMPORT_HTML);
+  const file = $('impFile');
+  file.addEventListener('change', async () => {
+    const f = file.files && file.files[0];
+    if (!f) return;
+    try {
+      const text = await f.text();
+      $('impText').value = text;
+      updateImportPreview();
+      toast(`已读入 ${f.name}`);
+    } catch (e) { toast('读取文件失败：' + String(e.message || e)); }
+  });
+  $('impText').addEventListener('input', updateImportPreview);
+  $('impSpec').addEventListener('click', showSpec);
+  $('impGo').addEventListener('click', doImport);
+  updateImportPreview();
+}
+
+function updateImportPreview() {
+  const box = $('impPreview');
+  if (!box) return;
+  const raw = $('impText').value.trim();
+  if (!raw) { box.textContent = '还没有内容'; return; }
+  const b = parseBook(raw);
+  const words = b.chapters.reduce((n, c) => n + countWords(c.content), 0);
+  box.innerHTML =
+    `本地解析：识别到 <b>${b.chapters.length}</b> 章 · ${words.toLocaleString()} 字` +
+    (b.title ? ` · 书名《${esc(b.title)}》` : '') +
+    (b.standard ? ' · 已是标准书稿' : '') +
+    (b.characters.length ? ` · 角色 ${b.characters.length} 个` : '') +
+    (b.warnings.length ? `<br><span style="color:var(--warn)">${esc(b.warnings.join(' '))}</span>` : '');
+}
+
+/* 把没分章的正文交给 AI 分块整理成标准章节 */
+async function aiRestructure(text, keywords, log) {
+  const SIZE = 6000;
+  const chunks = [];
+  for (let i = 0; i < text.length; i += SIZE) chunks.push(text.slice(i, i + SIZE));
+  const sys = `你是小说编辑助手，只输出小说正文，绝不做解释或点评。\n\n输出必须遵守下面的格式规范：\n${SPEC_PROMPT}`;
+  const parts = [];
+  let nextNo = 1;
+  let tail = '';
+  for (let i = 0; i < chunks.length; i++) {
+    log(`   整理第 ${i + 1}/${chunks.length} 块…`);
+    const user = [
+      keywords ? `这本书的关键词：${keywords}` : '',
+      `把下面这段小说正文整理成标准书稿的「章节部分」，要求：`,
+      `1. 用 \`## 第N章 章节名\` 开头，N 从 ${nextNo} 开始连续编号`,
+      `2. 章节名根据内容自己拟，6-14 个字`,
+      `3. 原文一字不改地保留，不要改写、删减或增补情节`,
+      `4. 只输出章节，不要输出书名和设定部分，不要写任何解释`,
+      `5. 如果这段开头是上一章的延续，就不要新开一章`,
+      tail ? `\n上一块结尾（仅供衔接，不要重复输出）：\n…${tail}` : '',
+      `\n【正文片段】\n${chunks[i]}`,
+    ].filter(Boolean).join('\n');
+    const res = await aiText(sys, user, { maxTokens: 8000 });
+    const parsed = parseBook(res);
+    nextNo += Math.max(1, parsed.chapters.length);
+    tail = res.slice(-240);
+    parts.push(res.trim());
+  }
+  return parts.join('\n\n');
+}
+
+/* 让 AI 读正文节选，补全设定（已有值保留，关键词优先） */
+async function aiFillMeta(book, keywords, log) {
+  const sample = book.chapters.slice(0, 3)
+    .map((c) => `## ${c.title}\n${String(c.content || '').slice(0, 1200)}`)
+    .join('\n\n').slice(0, 9000);
+  const titles = book.chapters.slice(0, 80).map((c) => c.title).filter(Boolean).join('、');
+  const sys = `你是资深小说编辑。只输出「墨阁书稿格式」的设定部分，不写正文、不做解释。\n\n格式规范：\n${SPEC_PROMPT}`;
+  const known = [
+    book.title ? `已知书名：${book.title}` : '',
+    book.meta.genre ? `已知题材：${book.meta.genre}` : '',
+    book.meta.pov ? `已知视角：${book.meta.pov}` : '',
+    book.meta.synopsis ? `已知简介：${book.meta.synopsis}` : '',
+    book.world ? `已知世界观：${String(book.world).slice(0, 400)}` : '',
+    book.style ? `已知文风：${String(book.style).slice(0, 200)}` : '',
+    book.characters.length ? `已知角色：${book.characters.map((c) => `${c.name}（${c.role || '?'}）`).join('、')}` : '',
+  ].filter(Boolean).join('\n');
+  const user = `根据下面的信息补全这本书的设定。已有的值请沿用，空缺的根据正文推断填上；关键词与已有值冲突时以关键词为准。
+${keywords ? `作者给的关键词：${keywords}\n` : ''}${known ? known + '\n' : ''}
+章节标题：${titles || '（无）'}
+
+正文节选：
+${sample || '（正文为空）'}
+
+请严格按格式输出（缺的可以留着不写，但要保留标题行）：
+# 书名
+- 题材：
+- 视角：（第一人称 / 第三人称有限视角 / 第三人称全知视角 三选一）
+- 一句话简介：（不超过 50 字）
+- 文风要求：（一句话）
+## 世界观设定
+（能推断才写，推断不出就留空）
+## 角色卡
+### 角色名
+- 身份：
+- 性格：
+- 目标：
+- 其他：`;
+  const res = await aiText(sys, user, { maxTokens: 3000 });
+  let parsed;
+  try { parsed = parseBook(res); } catch (e) { parsed = null; }
+  if (!parsed) return { meta: {}, characters: [] };
+  return { meta: parsed.meta || {}, world: parsed.world || '', style: parsed.style || parsed.meta.style || '', characters: parsed.characters || [] };
+}
+
+/* 批量生成章节摘要：每批 15 章，只发标题 + 前 300 字 */
+async function aiSummaries(chapters, keywords, log) {
+  const BATCH = 15;
+  for (let i = 0; i < chapters.length; i += BATCH) {
+    const part = chapters.slice(i, i + BATCH);
+    log(`   摘要第 ${i + 1}-${Math.min(i + BATCH, chapters.length)} 章 / 共 ${chapters.length} 章…`);
+    const list = part.map((c, k) => `【${i + k + 1}】${c.title}\n${String(c.content || '').slice(0, 300)}`).join('\n\n');
+    const sys = '你是小说编辑，只输出摘要列表，不做任何解释。';
+    const user = `为下面每一章写一句 20-40 字的前情摘要，交代关键人物、发生了什么、留下什么悬念。
+${keywords ? `全书关键词：${keywords}\n` : ''}严格按「序号|摘要」输出，每章一行，序号必须与给定的一致，不要多写也不要漏：
+1|摘要内容
+2|摘要内容
+
+${list}`;
+    const res = await aiText(sys, user, { maxTokens: 2500 });
+    const map = new Map();
+    for (const line of String(res).split('\n')) {
+      const m = /^\s*(\d{1,4})\s*[|｜:：.、]\s*(.+)$/.exec(line);
+      if (m) map.set(Number(m[1]), m[2].trim().replace(/^[「『"']|[」』"']$/g, ''));
+    }
+    part.forEach((c, k) => {
+      const s = map.get(i + k + 1);
+      if (s) c.summary = s.slice(0, 200);
+    });
+  }
+}
+
+async function doImport() {
+  const raw = $('impText').value.trim();
+  if (!raw) { toast('请先选择文件或粘贴正文'); return; }
+  const keywords = $('impKeywords').value.trim();
+  const wantMeta = $('impAIMeta').checked;
+  const wantSum = $('impAISum').checked;
+  const forceStruct = $('impAIStruct').checked;
+  const ai = hasAI();
+
+  const logBox = $('impLog');
+  logBox.hidden = false;
+  logBox.textContent = '';
+  const log = (s) => { logBox.textContent += s + '\n'; logBox.scrollTop = logBox.scrollHeight; };
+  const go = $('impGo');
+  go.disabled = true;
+  const oldLabel = go.textContent;
+  go.textContent = '导入中…';
+
+  try {
+    let book = parseBook(raw);
+    log(`① 本地解析：${book.chapters.length} 章 · ${book.chapters.reduce((n, c) => n + countWords(c.content), 0).toLocaleString()} 字`);
+
+    if (forceStruct || book.chapters.length <= 1) {
+      if (ai) {
+        log('② 用 AI 整理分章…（长篇会分块处理，请稍等）');
+        const restructured = await aiRestructure(raw, keywords, log);
+        const again = parseBook(restructured);
+        if (again.chapters.length >= book.chapters.length) {
+          book = { ...again, title: again.title || book.title };
+          log(`   整理完成：${book.chapters.length} 章`);
+        } else {
+          log('   整理结果反而更少章，保留本地解析');
+        }
+      } else {
+        log('② 未配置 AI 接口，跳过 AI 分章（可到「我的」配置后重来）');
+      }
+    } else {
+      log('② 本地已认出章节，跳过 AI 分章');
+    }
+
+    let meta = { ...book.meta };
+    if (wantMeta && ai) {
+      log('③ 用 AI 补全设定…');
+      const got = await aiFillMeta(book, keywords, log);
+      meta = { ...meta, ...got.meta };
+      if (got.world) book.world = got.world;
+      if (got.style) book.style = got.style;
+      if (got.characters.length) book.characters = got.characters;
+      log(`   题材=${meta.genre || '-'}　视角=${meta.pov || '-'}　角色 ${book.characters.length} 个`);
+    } else if (wantMeta && !ai) {
+      log('③ 未配置 AI 接口，跳过设定补全');
+    }
+
+    const title = String(meta.title || book.title || '导入的书').trim() || '导入的书';
+    const p = {
+      id: uid('p'), title,
+      genre: meta.genre || '', pov: meta.pov || '第三人称有限视角',
+      synopsis: meta.synopsis || '', world: book.world || '',
+      style: book.style || meta.style || '',
+      characters: (book.characters || []).map((c) => ({
+        name: c.name || '', role: c.role || '', traits: c.traits || '', goal: c.goal || '', desc: c.desc || '',
+      })),
+      goal: meta.goal || 2000, chunk: meta.chunk || 800,
+      aiSystem: '', createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    const chapters = book.chapters.map((c, i) => ({
+      id: uid('c'), projectId: p.id, title: c.title || `第${i + 1}章`, content: c.content || '',
+      summary: c.summary || '', order: i, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    log(`④ 准备写入：1 部作品 / ${chapters.length} 章`);
+
+    if (wantSum && ai) {
+      log('⑤ 用 AI 生成章节摘要…');
+      await aiSummaries(chapters, keywords, log);
+      const n = chapters.filter((c) => c.summary).length;
+      log(`   已生成 ${n} 条摘要`);
+    } else if (wantSum && !ai) {
+      log('⑤ 未配置 AI 接口，跳过摘要生成');
+    }
+
+    await db.put('projects', p);
+    for (let i = 0; i < chapters.length; i += 30) {
+      await Promise.all(chapters.slice(i, i + 30).map((c) => db.put('chapters', c)));
+    }
+    S.projects.unshift(p);
+    S.allChapters.push(...chapters);
+    log(`✅ 导入完成：《${title}》${chapters.length} 章 · ${chapters.reduce((n, c) => n + countWords(c.content), 0).toLocaleString()} 字`);
+    toast(`已导入《${title}》：${chapters.length} 章`);
+    markDirtyForSync();
+    closeModal();
+    await openProject(p.id);
+    renderLibrary();
+  } catch (e) {
+    const msg = String(e.message || e);
+    log('✕ 失败：' + msg);
+    toast('导入失败：' + msg.slice(0, 100), 5200);
+  } finally {
+    go.disabled = false;
+    go.textContent = oldLabel;
+  }
+}
+
+function showSpec() {
+  copySpec(true);
+}
+
+function copySpec(silent) {
+  const text = specText();
+  navigator.clipboard.writeText(text).then(
+    () => toast(silent ? '格式说明已复制，可以直接贴给任何 AI' : '已复制'),
+    () => {
+      openModal(`<h3>${FORMAT_NAME} v${FORMAT_VERSION}</h3>
+        <pre class="imp-log" style="max-height:60vh">${esc(text)}</pre>
+        <div class="btn-row"><button class="btn btn-primary" data-close="1">关闭</button></div>`);
+    }
+  );
+}
+
+/* ---------------- 存储占用 ---------------- */
+function bytesText(n) {
+  if (!n) return '0 B';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+async function storageReport() {
+  const projects = await db.all('projects');
+  const chapters = await db.all('chapters');
+  const contentBytes = new Blob([JSON.stringify({ projects, chapters })]).size;
+
+  const keys = await db.keys('kv');
+  const detail = {};
+  let kvBytes = 0;
+  for (const k of keys) {
+    const row = await db.get('kv', k);
+    const n = new Blob([JSON.stringify(row ? row.v : null)]).size;
+    kvBytes += n;
+    detail[k] = n;
+  }
+  const baselineBytes = detail['syncBaseline'] || 0;
+  const statsBytes = Object.entries(detail).filter(([k]) => k.startsWith('stats:')).reduce((n, [, v]) => n + v, 0);
+  const statsDays = Object.keys(detail).filter((k) => k.startsWith('stats:')).length;
+
+  let cacheBytes = 0;
+  let cacheCount = 0;
+  try {
+    if (window.caches) {
+      for (const name of await caches.keys()) {
+        const c = await caches.open(name);
+        for (const req of await c.keys()) {
+          const res = await c.match(req);
+          if (res) { cacheBytes += (await res.clone().blob()).size; cacheCount++; }
+        }
+      }
+    }
+  } catch (e) {}
+
+  let est = null;
+  try { if (navigator.storage && navigator.storage.estimate) est = await navigator.storage.estimate(); } catch (e) {}
+
+  return {
+    projects: projects.length,
+    chapters: chapters.length,
+    contentBytes,
+    kvBytes,
+    kvCount: keys.length,
+    baselineBytes,
+    statsBytes,
+    statsDays,
+    cacheBytes,
+    cacheCount,
+    usage: est ? est.usage : 0,
+    quota: est ? est.quota : 0,
+    persisted: navigator.storage && navigator.storage.persisted ? await navigator.storage.persisted() : null,
+  };
+}
+
+async function updateStorageInfo() {
+  const box = $('storageInfo');
+  if (!box) return;
+  box.textContent = '存储占用：统计中…';
+  try {
+    const r = await storageReport();
+    box.innerHTML =
+      `<b>存储占用：${bytesText(r.usage)}</b>${r.quota ? `（浏览器配额 ${bytesText(r.quota)}）` : ''}<br>` +
+      `· 小说正文：${bytesText(r.contentBytes)} —— ${r.projects} 部作品 / ${r.chapters} 章<br>` +
+      `· 同步基线：${bytesText(r.baselineBytes)}${r.baselineBytes ? '（每台设备留一份，用于冲突比对）' : '（还没开云同步）'}<br>` +
+      `· 其他元数据：${bytesText(Math.max(0, r.kvBytes - r.baselineBytes))} —— 共 ${r.kvCount} 项` +
+      `${r.statsDays ? `，其中写作统计 ${r.statsDays} 天 ${bytesText(r.statsBytes)}` : ''}<br>` +
+      `· App 离线缓存：${bytesText(r.cacheBytes)} —— ${r.cacheCount} 个文件<br>` +
+      `<span class="muted">这些都会跟着你的内容走，不会无限增长；浏览器清理站点数据会一起清掉，记得常备份。</span>`;
+  } catch (e) {
+    box.textContent = '存储占用：读取失败 - ' + String(e.message || e);
+  }
 }
 
 async function backup() {
@@ -1170,6 +1552,37 @@ async function doInstall() {
   S.deferredPrompt = null;
   toast(outcome === 'accepted' ? '安装中…请看系统提示' : '已取消安装');
   updateInstallUI();
+  // 安卓 Chrome 的安装要去 Google 服务器打包，国内网络会转圈很久再失败
+  if (outcome === 'accepted') {
+    setTimeout(() => {
+      const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+      if (!standalone) installHelp();
+    }, 90000);
+  }
+}
+
+function installHelp() {
+  const secure = isSecureContext;
+  openModal(`
+    <h3>装不上？先看这里</h3>
+    <p class="small"><b>先说结论：墨阁本身没问题。</b>用 Chrome 官方的安装性检查跑过 —— manifest 字段齐全、图标尺寸正确、离线 Service Worker 正常，<b>0 个安装性错误</b>。转圈很久最后失败，几乎都是网络原因。</p>
+    <p class="small"><b>为什么会失败</b><br>
+    安卓 Chrome 的「安装应用」不是建个快捷方式 —— 它要把网页送到 <b>Google 的服务器</b>（webapk.googleapis.com）打包成一个真正的 APK（叫 WebAPK），再下载到手机安装。
+    国内网络连不上 Google，就会一直转圈然后报失败。</p>
+    ${secure ? '' : '<p class="small">⚠️ 你现在打开的还不是 https 地址（或 localhost）。<b>非安全上下文 Chrome 根本不会提供「安装应用」</b>，请改用 GitHub Pages / Netlify 的 https 网址。</p>'}
+    <p class="small"><b>办法一：装的时候挂一次代理（最省事）</b><br>
+    连上代理后再点「安装应用」，装好就可以关掉 —— 装完的 App 不需要再连 Google。</p>
+    <p class="small"><b>办法二：打包成 APK 直接装（不经过 Google，最可靠）</b><br>
+    1. 电脑打开 <a href="https://www.pwabuilder.com" target="_blank" rel="noopener">pwabuilder.com</a>，输入墨阁的网址，点 Start<br>
+    2. 选 Android → Download，得到签名好的 <code>.apk</code><br>
+    3. 把 APK 传到手机，安装时允许「未知来源」<br>
+    4. 想要全屏无地址栏：把 PWABuilder 给的 <code>assetlinks.json</code> 放进网站根目录的 <code>.well-known/</code> 文件夹</p>
+    <p class="small"><b>办法三：用别的浏览器建快捷方式</b><br>
+    手机自带浏览器、Firefox 的「添加到主屏幕」是<b>本地创建</b>的，不经过 Google，能当桌面入口用（界面通常带浏览器栏）。</p>
+    <p class="muted tiny">· 局域网地址 <code>http://192.168.x.x:5173/</code> 不是安全上下文，不能安装，必须用 https 的线上地址<br>
+    · 装不上完全不影响使用：直接把这个网址收藏到桌面，功能一模一样</p>
+    <div class="btn-row"><button class="btn btn-primary" data-close="1">知道了</button></div>
+  `);
 }
 
 function helpModal() {
@@ -1201,6 +1614,9 @@ function bindGlobal() {
   // 书架
   $('btnNewProject').addEventListener('click', createProject);
   $('btnNewProject2').addEventListener('click', createProject);
+  $('btnImportBook').addEventListener('click', importBookFlow);
+  $('btnImportBook2').addEventListener('click', importBookFlow);
+  $('btnImportBook3').addEventListener('click', importBookFlow);
 
   // 编辑器
   const ed = $('editor');
@@ -1349,10 +1765,13 @@ function bindGlobal() {
   });
 
   // 数据
-  $('btnExportTxt').addEventListener('click', () => exportProject(S.project, 'txt'));
-  $('btnExportMd').addEventListener('click', () => exportProject(S.project, 'md'));
+  $('btnExportMd').addEventListener('click', () => exportProject(S.project, 'standard-md'));
+  $('btnExportTxt').addEventListener('click', () => exportProject(S.project, 'standard-txt'));
+  $('btnExportPlain').addEventListener('click', () => exportProject(S.project, 'plain-txt'));
   $('btnExportAll').addEventListener('click', exportAllTxt);
+  $('btnSpec').addEventListener('click', showSpec);
   $('btnBackup').addEventListener('click', backup);
+  $('btnStorageInfo').addEventListener('click', updateStorageInfo);
   $('btnRestore').addEventListener('click', () => $('fileInput').click());
   $('fileInput').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) restoreFrom(f); e.target.value = ''; });
   $('btnHelp').addEventListener('click', helpModal);
@@ -1363,6 +1782,7 @@ function bindGlobal() {
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); S.deferredPrompt = e; updateInstallUI(); });
   window.addEventListener('appinstalled', () => { S.deferredPrompt = null; toast('安装成功，可以从桌面图标打开了'); updateInstallUI(); });
   $('btnInstall').addEventListener('click', doInstall);
+  $('btnInstallHelp').addEventListener('click', installHelp);
   updateInstallUI();
 
   // 保存时机
@@ -1379,7 +1799,10 @@ function bindGlobal() {
   });
 }
 
-window.MOGE = { S, db, countWords, buildContext, runSync, reloadFromDB, renderSync };
+window.MOGE = {
+  S, db, countWords, buildContext, runSync, reloadFromDB, renderSync, storageReport,
+  importBookFlow, doImport, parseBook, serializeBook, specText, exportProject,
+};
 
 boot().catch((e) => {
   console.error(e);

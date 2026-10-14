@@ -8,6 +8,7 @@ import zlib from 'node:zlib';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { makeProfile, killAndClean, announceSweep } from './temp.mjs';
 
 const URL_ = process.argv[2] || 'http://127.0.0.1:5173/';
 const CHROME = [
@@ -18,7 +19,8 @@ const CHROME = [
 if (!CHROME) { console.error('找不到 Chrome'); process.exit(2); }
 
 const PORT = 9333;
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'moge-smoke-'));
+announceSweep();
+const profile = makeProfile('smoke');
 const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
   '--remote-debugging-port=' + PORT, '--user-data-dir=' + profile,
@@ -167,6 +169,20 @@ const EXPR = `(async () => {
   R.cfgFields = ['cfgProvider','cfgBaseUrl','cfgApiKey','cfgModel','cfgTemp','cfgContext','cfgSystem','cfgProxy','cfgFontSize']
     .every(id => !!document.getElementById(id));
   R.providerOptions = document.querySelectorAll('#cfgProvider option').length;
+  await sleep(400);
+  R.storage = await MOGE.storageReport();
+  R.storageText = document.getElementById('storageInfo').textContent.slice(0, 120);
+  document.getElementById('btnInstallHelp').click();
+  await sleep(250);
+  R.installHelp = (() => {
+    const t = document.getElementById('modalBox');
+    return {
+      opened: !!(t.querySelector('h3') && t.textContent.includes('装不上')),
+      explainsGoogle: t.textContent.includes('WebAPK') && t.textContent.includes('Google'),
+      offersApk: !!t.querySelector('a[href*="pwabuilder"]'),
+    };
+  })();
+  document.querySelector('#modalBox [data-close]').click();
   document.getElementById('btnBackup').click();
   await sleep(400);
 
@@ -507,6 +523,116 @@ try {
 
   cloudSrv.close();
 
+  /* ---------- 阶段四：AI 导入书籍 ---------- */
+  // 这个 mock 按提示词内容分别返回「分章结果 / 设定块 / 摘要列表」
+  const importAI = http.createServer((req, res) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS' };
+    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => {
+      let user = '';
+      try {
+        const body = JSON.parse(raw || '{}');
+        user = (body.messages || []).map((m) => m.content).join('\n');
+      } catch (_) {}
+      let content = '（mock 未识别请求）';
+      if (/整理成标准书稿的「章节部分」/.test(user)) {
+        const m = /【正文片段】\n([\s\S]*)$/.exec(user);
+        const body = (m ? m[1] : user).trim();
+        const half = Math.ceil(body.length / 2);
+        content = `## 第1章 夜里的钟声\n\n${body.slice(0, half)}\n\n## 第2章 灯塔来信\n\n${body.slice(half)}`;
+      } else if (/补全这本书的设定/.test(user)) {
+        content = `# 荒海灯
+
+- 题材：科幻 · 悬疑
+- 视角：第一人称
+- 一句话简介：灯塔守夜人在废土上收到三十年前寄出的回信。
+- 文风要求：冷峻克制，短句为主
+
+## 世界观设定
+
+海平面上升之后，人类只剩七座灯塔可以居住。
+
+## 角色卡
+
+### 陈默
+- 身份：七号灯塔守夜人
+- 性格：沉默寡言，怕黑
+- 目标：找到信的寄件人
+- 其他：左耳有一道旧伤
+`;
+      } else if (/前情摘要/.test(user)) {
+        const nums = [...user.matchAll(/【(\d+)】/g)].map((m) => Number(m[1]));
+        content = nums.map((n) => `${n}|第${n}章：钟声响起，主角收到一封旧信。`).join('\n');
+      }
+      res.writeHead(200, { ...cors, 'content-type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content } }] }));
+    });
+  });
+  await new Promise((r) => importAI.listen(5199, '127.0.0.1', r));
+
+  const RAW_BOOK = `钟声响了七下。\n\n陈默从床上坐起来，摸黑找到那盏灯。他怕黑，但灯塔不能没有光。\n\n信件躺在门缝里，信封上写着三十年前的日期。\n\n他拆开信，只看到一行字：别让灯灭。\n\n窗外，海面像一块烧过的铁，慢慢冷下去。`;
+  results.importButtons = await ev(`({
+    lib: !!document.getElementById('btnImportBook'),
+    empty: !!document.getElementById('btnImportBook2'),
+    settings: !!document.getElementById('btnImportBook3'),
+  })`);
+  await ev(`MOGE.importBookFlow()`, true);
+  await sleep(300);
+  results.importModal = await ev(`!!document.getElementById('impText')`);
+  await ev(`(() => {
+    const t = document.getElementById('impText');
+    t.value = ${JSON.stringify(RAW_BOOK)};
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('impKeywords').value = '科幻 灯塔 废土';
+  })()`);
+  await sleep(200);
+  results.importPreviewText = await ev(`document.getElementById('impPreview').textContent`);
+  await ev(`document.getElementById('impGo').click()`);
+
+  let lastLog = '';
+  for (let i = 0; i < 120; i++) {
+    const st = await ev(`({
+      done: document.getElementById('modalMask').hidden,
+      log: (document.getElementById('impLog') || {}).textContent || '',
+    })`);
+    if (st.log && st.log.length >= lastLog.length) lastLog = st.log;
+    if (st.done) break;
+    await sleep(150);
+  }
+  results.importLog = lastLog;
+
+  await sleep(800);   // 等 openProject/renderLibrary 收尾
+  results.imported = await ev(`(async () => {
+    const ps = await MOGE.db.all('projects');
+    const p = ps.find((x) => x.title === '荒海灯');
+    if (!p) return { found: false, titles: ps.map((x) => x.title) };
+    const cs = (await MOGE.db.all('chapters')).filter((c) => c.projectId === p.id).sort((a, b) => a.order - b.order);
+    return {
+      found: true, title: p.title, genre: p.genre, pov: p.pov, synopsis: p.synopsis,
+      world: p.world, style: p.style, chars: p.characters.map((c) => c.name + '/' + c.role),
+      chapters: cs.length, chapterTitles: cs.map((c) => c.title),
+      summaries: cs.map((c) => c.summary),
+      words: cs.reduce((n, c) => n + MOGE.countWords(c.content), 0),
+      keptOriginal: cs.map((c) => c.content).join('').includes('别让灯灭'),
+    };
+  })()`, true);
+  results.projectCountAfterImport = await ev(`(async () => (await MOGE.db.all('projects')).length)()`, true);
+  results.importActiveView = await ev(`document.querySelector('.view.active').id`);
+
+  // 纯本地导入（不调 AI）：标准书稿直接进库
+  results.localImport = await ev(`(async () => {
+    const md = MOGE.serializeBook(
+      { title: '本地书', genre: '武侠', pov: '第三人称全知视角', synopsis: '简介', style: '文风', world: '世界', goal: 1500, chunk: 600, characters: [{ name: '甲', role: '剑客', traits: 'x', goal: 'y', desc: 'z' }] },
+      [{ order: 0, title: '第一章 起', summary: '摘要', content: '正文一。' }, { order: 1, title: '第二章 承', summary: '', content: '正文二。' }]
+    );
+    const b = MOGE.parseBook(md);
+    return { chapters: b.chapters.length, title: b.title, genre: b.meta.genre, pov: b.meta.pov, chars: b.characters.length, summary: b.chapters[0].summary, standard: b.standard };
+  })()`, true);
+
+  importAI.close();
+
   const consoleErrors = events
     .filter((e) => e.method === 'Runtime.consoleAPICalled' && e.params.type === 'error')
     .map((e) => e.params.args.map((a) => a.value || a.description).join(' '));
@@ -520,8 +646,7 @@ try {
   failed = true;
   console.error('测试失败：', e.message);
 } finally {
-  chrome.kill();
-  try { fs.rmSync(profile, { recursive: true, force: true }); } catch (_) {}
+  await killAndClean(chrome, profile);
 }
 
 const errs = results.errs || [];
@@ -551,6 +676,9 @@ const checks = [
   ['「替换选中」替换正确', results.replacedSelection === true],
   ['作品菜单弹窗', results.bookMenuButtons === 5],
   ['设置项齐全', results.cfgFields === true && results.providerOptions >= 10],
+  ['安装失败排查入口可用', results.installHelp?.opened === true && results.installHelp?.explainsGoogle === true && results.installHelp?.offersApk === true],
+  ['存储占用可读取', typeof results.storage?.usage === 'number' && results.storage?.chapters >= 1 && results.storage?.contentBytes > 0],
+  ['存储占用已显示在页面上', /存储占用/.test(results.storageText || '') && /小说正文/.test(results.storageText || '')],
   ['上下文组装正确', results.contextOk === true],
   ['提示词生成正常', results.promptLen > 200],
   ['服务商数量', results.providers === 12],
@@ -577,6 +705,18 @@ const checks = [
   ['云同步：Gist 自动创建', !!results.gistSync?.gistId && results.gistStored === 1],
   ['云同步：Gist 二次同步走更新', results.gistUpdate?.ok === true && results.gistCount === 1],
   ['云同步：认证失败有友好提示', /\[401\]/.test(results.syncErr401 || '')],
+  ['导入：三个入口都在', results.importButtons?.lib && results.importButtons?.empty && results.importButtons?.settings],
+  ['导入：弹窗能打开', results.importModal === true],
+  ['导入：本地预解析（无分章→1 章）', /识别到 1 章/.test(results.importPreviewText || ''), results.importPreviewText],
+  ['导入：AI 分章成功（1→2 章）', results.imported?.chapters === 2, JSON.stringify(results.imported?.chapterTitles) + ' | ' + (results.importLog || '').slice(-150)],
+  ['导入：AI 补全书名/题材/视角', results.imported?.title === '荒海灯' && /科幻/.test(results.imported?.genre || '') && results.imported?.pov === '第一人称'],
+  ['导入：AI 补全世界观与文风', /七座灯塔/.test(results.imported?.world || '') && !!results.imported?.style],
+  ['导入：AI 补全角色卡', (results.imported?.chars || []).some((c) => c.includes('陈默'))],
+  ['导入：章节内容一字未改', results.imported?.keptOriginal === true && results.imported?.words > 60],
+  ['导入：AI 生成章节摘要', (results.imported?.summaries || []).length > 0 && results.imported.summaries.every((s) => /摘要|钟声/.test(s || ''))],
+  ['导入：入库为一本新书', results.projectCountAfterImport === 2 && results.imported?.found === true],
+  ['导入：完成后自动打开新书', results.importActiveView === 'view-editor'],
+  ['导出→导入 标准书稿往返', results.localImport?.standard === true && results.localImport?.chapters === 2 && results.localImport?.title === '本地书' && results.localImport?.chars === 1 && !!results.localImport?.summary],
   ['云同步：内置配置教程可打开', results.syncGuide?.title?.includes('GitHub') === true && results.syncGuide?.hasTokenUrl === true],
   ['云同步：教程含 Gist ID 与多设备说明', results.syncGuide?.hasGistIdHint === true && results.syncGuide?.hasSecondDevice === true],
   ['云同步：教程里的令牌网址可点', results.syncGuide?.hasTokenLink === true],

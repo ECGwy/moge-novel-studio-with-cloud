@@ -1,5 +1,5 @@
 /* 墨阁 Service Worker：应用外壳离线可用，联网请求一律直连 */
-const CACHE = 'moge-v1.1.0';
+const CACHE = 'moge-v1.2.0';
 const ASSETS = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const ASSETS = [
   './js/providers.js',
   './js/prompts.js',
   './js/sync.js',
+  './js/book-format.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
